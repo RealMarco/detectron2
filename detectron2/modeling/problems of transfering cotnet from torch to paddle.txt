@@ -1,7 +1,0 @@
-weight_init.c2_msra_fill(layer) 
-
-LocalConv
-	view
-
-return out.contiguous()
-

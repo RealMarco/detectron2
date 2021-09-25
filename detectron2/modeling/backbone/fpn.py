@@ -1,7 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import math
 import fvcore.nn.weight_init as weight_init
-import torch
 import torch.nn.functional as F
 from torch import nn
 
@@ -10,8 +9,11 @@ from detectron2.layers import Conv2d, ShapeSpec, get_norm
 from .backbone import Backbone
 from .build import BACKBONE_REGISTRY
 from .resnet import build_resnet_backbone
+from .cotnet import build_cotnet_backbone
+from .cotnext import build_cotnext_backbone
+from .secotnetd import build_secotnetd_backbone
 
-__all__ = ["build_resnet_fpn_backbone", "build_retinanet_resnet_fpn_backbone", "FPN"]
+__all__ = ["build_cotnet_fpn_backbone", "build_cotnext_fpn_backbone", "build_secotnetd_fpn_backbone", "build_resnet_fpn_backbone", "build_retinanet_resnet_fpn_backbone", "FPN"]
 
 
 class FPN(Backbone):
@@ -19,8 +21,6 @@ class FPN(Backbone):
     This module implements :paper:`FPN`.
     It creates pyramid features built on top of some input feature maps.
     """
-
-    _fuse_type: torch.jit.Final[str]
 
     def __init__(
         self, bottom_up, in_features, out_channels, norm="", top_block=None, fuse_type="sum"
@@ -129,20 +129,17 @@ class FPN(Backbone):
         results.append(self.output_convs[0](prev_features))
 
         # Reverse feature maps into top-down order (from low to high resolution)
-        for idx, (lateral_conv, output_conv) in enumerate(
-            zip(self.lateral_convs, self.output_convs)
+        for features, lateral_conv, output_conv in zip(
+            self.in_features[-2::-1], self.lateral_convs[1:], self.output_convs[1:]
         ):
-            # Slicing of ModuleList is not supported https://github.com/pytorch/pytorch/issues/47336
-            # Therefore we loop over all modules but skip the first one
-            if idx > 0:
-                features = self.in_features[-idx - 1]
-                features = bottom_up_features[features]
-                top_down_features = F.interpolate(prev_features, scale_factor=2.0, mode="nearest")
-                lateral_features = lateral_conv(features)
-                prev_features = lateral_features + top_down_features
-                if self._fuse_type == "avg":
-                    prev_features /= 2
-                results.insert(0, output_conv(prev_features))
+            features = bottom_up_features[features]
+            top_down_features = F.interpolate(prev_features, scale_factor=2.0, mode="nearest")
+            # Has to use explicit forward due to https://github.com/pytorch/pytorch/issues/47336
+            lateral_features = lateral_conv.forward(features)
+            prev_features = lateral_features + top_down_features
+            if self._fuse_type == "avg":
+                prev_features /= 2
+            results.insert(0, output_conv.forward(prev_features))
 
         if self.top_block is not None:
             if self.top_block.in_feature in bottom_up_features:
@@ -218,6 +215,72 @@ def build_resnet_fpn_backbone(cfg, input_shape: ShapeSpec):
         backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
     """
     bottom_up = build_resnet_backbone(cfg, input_shape)
+    in_features = cfg.MODEL.FPN.IN_FEATURES
+    out_channels = cfg.MODEL.FPN.OUT_CHANNELS
+    backbone = FPN(
+        bottom_up=bottom_up,
+        in_features=in_features,
+        out_channels=out_channels,
+        norm=cfg.MODEL.FPN.NORM,
+        top_block=LastLevelMaxPool(),
+        fuse_type=cfg.MODEL.FPN.FUSE_TYPE,
+    )
+    return backbone
+
+@BACKBONE_REGISTRY.register()
+def build_cotnet_fpn_backbone(cfg, input_shape: ShapeSpec):
+    """
+    Args:
+        cfg: a detectron2 CfgNode
+
+    Returns:
+        backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
+    """
+    bottom_up = build_cotnet_backbone(cfg, input_shape)
+    in_features = cfg.MODEL.FPN.IN_FEATURES
+    out_channels = cfg.MODEL.FPN.OUT_CHANNELS
+    backbone = FPN(
+        bottom_up=bottom_up,
+        in_features=in_features,
+        out_channels=out_channels,
+        norm=cfg.MODEL.FPN.NORM,
+        top_block=LastLevelMaxPool(),
+        fuse_type=cfg.MODEL.FPN.FUSE_TYPE,
+    )
+    return backbone
+
+@BACKBONE_REGISTRY.register()
+def build_cotnext_fpn_backbone(cfg, input_shape: ShapeSpec):
+    """
+    Args:
+        cfg: a detectron2 CfgNode
+
+    Returns:
+        backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
+    """
+    bottom_up = build_cotnext_backbone(cfg, input_shape)
+    in_features = cfg.MODEL.FPN.IN_FEATURES
+    out_channels = cfg.MODEL.FPN.OUT_CHANNELS
+    backbone = FPN(
+        bottom_up=bottom_up,
+        in_features=in_features,
+        out_channels=out_channels,
+        norm=cfg.MODEL.FPN.NORM,
+        top_block=LastLevelMaxPool(),
+        fuse_type=cfg.MODEL.FPN.FUSE_TYPE,
+    )
+    return backbone
+
+@BACKBONE_REGISTRY.register()
+def build_secotnetd_fpn_backbone(cfg, input_shape: ShapeSpec):
+    """
+    Args:
+        cfg: a detectron2 CfgNode
+
+    Returns:
+        backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
+    """
+    bottom_up = build_secotnetd_backbone(cfg, input_shape)
     in_features = cfg.MODEL.FPN.IN_FEATURES
     out_channels = cfg.MODEL.FPN.OUT_CHANNELS
     backbone = FPN(
